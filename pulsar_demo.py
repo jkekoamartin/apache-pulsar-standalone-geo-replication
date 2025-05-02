@@ -35,7 +35,34 @@ message_counts = {
     'alpha_received': 0,
     'beta_received': 0,
     'gamma_received': 0,
-    'unique_total': 0
+    'unique_total': 0,
+    'end_to_end_success': 0,
+    'total_sent': 0
+}
+
+# Track producers and consumers
+producers = {
+    'alpha': None,
+    'beta': None,
+    'gamma': None
+}
+
+producer_clients = {
+    'alpha': None,
+    'beta': None,
+    'gamma': None
+}
+
+consumers = {
+    'alpha': None,
+    'beta': None,
+    'gamma': None
+}
+
+consumer_clients = {
+    'alpha': None,
+    'beta': None,
+    'gamma': None
 }
 
 # Track received message IDs to detect duplicates
@@ -51,6 +78,15 @@ running = True
 alpha_failed = False
 beta_failed = False
 gamma_failed = False
+
+# Chaos parameters
+chaos_params = {
+    'failure_probability': 0.7,
+    'min_downtime': 10,
+    'max_downtime': 30,
+    'min_interval': 30,
+    'max_interval': 90
+}
 
 def signal_handler(sig, frame):
     global running
@@ -99,46 +135,76 @@ def detect_out_of_order(sequence):
     last_sequence = sequence
     return False
 
-def producer_task():
-    global alpha_failed
+def connect_producer(cluster_name):
+    """Connect to a specific cluster and create a producer"""
+    global producers, producer_clients
+
+    port_map = {
+        'alpha': 6650,
+        'beta': 6651,
+        'gamma': 6652
+    }
 
     try:
-        # Connect to alpha cluster
-        log_message("PRODUCER", "Connecting to alpha cluster...", "cyan")
-        client = pulsar.Client('pulsar://localhost:6650')
+        # Connect to the cluster
+        log_message("PRODUCER", f"Connecting to {cluster_name} cluster...", "cyan")
+        client = pulsar.Client(f'pulsar://localhost:{port_map[cluster_name]}')
         producer = client.create_producer(
             'persistent://acme/test/demo',
             properties={
-                "producer-name": "demo-producer",
-                "producer-id": "1"
+                "producer-name": f"{cluster_name}-producer",
+                "producer-id": f"{cluster_name}"
             }
         )
-        log_message("PRODUCER", "Connected to alpha cluster", "green")
+
+        # Store the client and producer
+        producer_clients[cluster_name] = client
+        producers[cluster_name] = producer
+
+        log_message("PRODUCER", f"Connected to {cluster_name} cluster", "green")
+        return True
     except Exception as e:
-        log_message("PRODUCER", f"Failed to connect to alpha cluster: {str(e)}", "red")
-        alpha_failed = True
+        log_message("PRODUCER", f"Failed to connect to {cluster_name} cluster: {str(e)}", "red")
+        return False
+
+def producer_task():
+    global alpha_failed, beta_failed, gamma_failed
+
+    # Connect to all clusters initially
+    alpha_connected = connect_producer('alpha')
+    beta_connected = connect_producer('beta')
+    gamma_connected = connect_producer('gamma')
+
+    # If we couldn't connect to any cluster, exit
+    if not (alpha_connected or beta_connected or gamma_connected):
+        log_message("PRODUCER", "Failed to connect to any cluster, exiting", "red")
         return
 
     sequence = 0
     while running:
         try:
-            if alpha_failed:
-                # Switch to beta cluster if alpha fails
-                log_message("PRODUCER", "Alpha cluster failed, switching to beta cluster", "yellow")
-                try:
-                    client.close()
-                    client = pulsar.Client('pulsar://localhost:6651')
-                    producer = client.create_producer(
-                        'persistent://acme/test/demo',
-                        properties={
-                            "producer-name": "demo-producer",
-                            "producer-id": "1"
-                        }
-                    )
-                    log_message("PRODUCER", "Connected to beta cluster", "green")
-                    # Don't reset the flag here, let the failure simulator handle it
-                except Exception as e:
-                    log_message("PRODUCER", f"Failed to connect to beta cluster: {str(e)}", "red")
+            # Determine which cluster to use
+            active_cluster = None
+
+            # Try alpha first if it's not failed
+            if not alpha_failed and producers['alpha'] is not None:
+                active_cluster = 'alpha'
+            # Try beta if alpha failed or beta if it's not failed
+            elif not beta_failed and producers['beta'] is not None:
+                active_cluster = 'beta'
+            # Try gamma if both alpha and beta failed
+            elif not gamma_failed and producers['gamma'] is not None:
+                active_cluster = 'gamma'
+            # If all clusters failed, try to reconnect to any available cluster
+            else:
+                if not alpha_failed and connect_producer('alpha'):
+                    active_cluster = 'alpha'
+                elif not beta_failed and connect_producer('beta'):
+                    active_cluster = 'beta'
+                elif not gamma_failed and connect_producer('gamma'):
+                    active_cluster = 'gamma'
+                else:
+                    log_message("PRODUCER", "All clusters are down, waiting...", "red")
                     time.sleep(1)
                     continue
 
@@ -153,116 +219,187 @@ def producer_task():
             # Serialize message to JSON
             message_json = json.dumps(message_data)
 
-            # Send the message
-            producer.send(message_json.encode('utf-8'))
+            # Send the message to the active cluster
+            producers[active_cluster].send(message_json.encode('utf-8'))
 
             # Update visualization data
-            if not alpha_failed:
-                update_visualization_data('producer', 'alpha', message_data['id'])
-                message_counts['alpha_sent'] += 1
-                log_message("PRODUCER", f"Sent message to alpha: {message_data['id']}", "cyan")
-            else:
-                update_visualization_data('producer', 'beta', message_data['id'])
-                message_counts['beta_sent'] += 1
-                log_message("PRODUCER", f"Sent message to beta: {message_data['id']}", "cyan")
+            message_counts['total_sent'] += 1
+            message_counts[f'{active_cluster}_sent'] += 1
+            update_visualization_data('producer', active_cluster, message_data['id'])
+            log_message("PRODUCER", f"Sent message to {active_cluster}: {message_data['id']}", "cyan")
 
             sequence += 1
             time.sleep(1)  # Send a message every second
 
         except Exception as e:
             log_message("PRODUCER", f"Error: {str(e)}", "red")
-            # If we get an error with alpha, switch to beta
-            if not alpha_failed:
+
+            # If we get an error with the active cluster, mark it as failed
+            if active_cluster == 'alpha':
                 alpha_failed = True
+            elif active_cluster == 'beta':
+                beta_failed = True
+            elif active_cluster == 'gamma':
+                gamma_failed = True
+
+            # Close the failed producer and client
+            try:
+                if producers[active_cluster]:
+                    producers[active_cluster].close()
+                    producers[active_cluster] = None
+                if producer_clients[active_cluster]:
+                    producer_clients[active_cluster].close()
+                    producer_clients[active_cluster] = None
+            except Exception as cleanup_error:
+                log_message("PRODUCER", f"Error during cleanup: {str(cleanup_error)}", "red")
+
             time.sleep(1)
 
-    # Clean up
-    try:
-        producer.close()
-        client.close()
-    except Exception as e:
-        log_message("PRODUCER", f"Error during cleanup: {str(e)}", "red")
+    # Clean up all producers and clients
+    for cluster in ['alpha', 'beta', 'gamma']:
+        try:
+            if producers[cluster]:
+                producers[cluster].close()
+                producers[cluster] = None
+            if producer_clients[cluster]:
+                producer_clients[cluster].close()
+                producer_clients[cluster] = None
+        except Exception as e:
+            log_message("PRODUCER", f"Error during cleanup of {cluster}: {str(e)}", "red")
 
     log_message("PRODUCER", "Producer task completed", "green")
 
-def consumer_task():
+def connect_consumer(cluster_name):
+    """Connect to a specific cluster and create a consumer"""
+    global consumers, consumer_clients
+
+    port_map = {
+        'alpha': 6650,
+        'beta': 6651,
+        'gamma': 6652
+    }
+
     try:
-        # Connect to all clusters for failover
-        log_message("CONSUMER", "Connecting to alpha, beta, and gamma clusters...", "cyan")
-        client_alpha = pulsar.Client('pulsar://localhost:6650')
-        client_beta = pulsar.Client('pulsar://localhost:6651')
-        client_gamma = pulsar.Client('pulsar://localhost:6652')
-
-        # Create a shared subscription consumer on alpha
-        consumer_alpha = client_alpha.subscribe(
+        # Connect to the cluster
+        log_message("CONSUMER", f"Connecting to {cluster_name} cluster...", "cyan")
+        client = pulsar.Client(f'pulsar://localhost:{port_map[cluster_name]}')
+        consumer = client.subscribe(
             'persistent://acme/test/demo',
             'shared-subscription',
             consumer_type=pulsar.ConsumerType.Shared,
             initial_position=pulsar.InitialPosition.Earliest
         )
 
-        # Create a shared subscription consumer on beta
-        consumer_beta = client_beta.subscribe(
-            'persistent://acme/test/demo',
-            'shared-subscription',
-            consumer_type=pulsar.ConsumerType.Shared,
-            initial_position=pulsar.InitialPosition.Earliest
-        )
+        # Store the client and consumer
+        consumer_clients[cluster_name] = client
+        consumers[cluster_name] = consumer
 
-        # Create a shared subscription consumer on gamma
-        consumer_gamma = client_gamma.subscribe(
-            'persistent://acme/test/demo',
-            'shared-subscription',
-            consumer_type=pulsar.ConsumerType.Shared,
-            initial_position=pulsar.InitialPosition.Earliest
-        )
-
-        log_message("CONSUMER", "Connected to alpha, beta, and gamma clusters with shared subscription", "green")
+        log_message("CONSUMER", f"Connected to {cluster_name} cluster with shared subscription", "green")
+        return True
     except Exception as e:
-        log_message("CONSUMER", f"Failed to connect to clusters: {str(e)}", "red")
+        log_message("CONSUMER", f"Failed to connect to {cluster_name} cluster: {str(e)}", "red")
+        return False
+
+def consumer_task():
+    global alpha_failed, beta_failed, gamma_failed
+
+    # Connect to all clusters initially
+    alpha_connected = connect_consumer('alpha')
+    beta_connected = connect_consumer('beta')
+    gamma_connected = connect_consumer('gamma')
+
+    # If we couldn't connect to any cluster, exit
+    if not (alpha_connected or beta_connected or gamma_connected):
+        log_message("CONSUMER", "Failed to connect to any cluster, exiting", "red")
         return
+
+    log_message("CONSUMER", "Connected to clusters with shared subscription", "green")
 
     while running:
         try:
             # Try to receive from alpha
-            if not alpha_failed:
+            if not alpha_failed and consumers['alpha'] is not None:
                 try:
-                    msg_alpha = consumer_alpha.receive(timeout_millis=500)
-                    process_message(msg_alpha, consumer_alpha, 'alpha')
+                    msg_alpha = consumers['alpha'].receive(timeout_millis=500)
+                    process_message(msg_alpha, consumers['alpha'], 'alpha')
                 except Exception as e:
                     if "Timeout" not in str(e):
                         log_message("CONSUMER", f"Alpha error: {str(e)}", "red")
+                        # If we get a non-timeout error, try to reconnect
+                        try:
+                            if consumers['alpha']:
+                                consumers['alpha'].close()
+                            if consumer_clients['alpha']:
+                                consumer_clients['alpha'].close()
+                        except:
+                            pass
+                        consumers['alpha'] = None
+                        consumer_clients['alpha'] = None
+                        alpha_failed = True
 
             # Try to receive from beta
-            try:
-                msg_beta = consumer_beta.receive(timeout_millis=500)
-                process_message(msg_beta, consumer_beta, 'beta')
-            except Exception as e:
-                if "Timeout" not in str(e):
-                    log_message("CONSUMER", f"Beta error: {str(e)}", "red")
+            if not beta_failed and consumers['beta'] is not None:
+                try:
+                    msg_beta = consumers['beta'].receive(timeout_millis=500)
+                    process_message(msg_beta, consumers['beta'], 'beta')
+                except Exception as e:
+                    if "Timeout" not in str(e):
+                        log_message("CONSUMER", f"Beta error: {str(e)}", "red")
+                        # If we get a non-timeout error, try to reconnect
+                        try:
+                            if consumers['beta']:
+                                consumers['beta'].close()
+                            if consumer_clients['beta']:
+                                consumer_clients['beta'].close()
+                        except:
+                            pass
+                        consumers['beta'] = None
+                        consumer_clients['beta'] = None
+                        beta_failed = True
 
             # Try to receive from gamma
-            try:
-                msg_gamma = consumer_gamma.receive(timeout_millis=500)
-                process_message(msg_gamma, consumer_gamma, 'gamma')
-            except Exception as e:
-                if "Timeout" not in str(e):
-                    log_message("CONSUMER", f"Gamma error: {str(e)}", "red")
+            if not gamma_failed and consumers['gamma'] is not None:
+                try:
+                    msg_gamma = consumers['gamma'].receive(timeout_millis=500)
+                    process_message(msg_gamma, consumers['gamma'], 'gamma')
+                except Exception as e:
+                    if "Timeout" not in str(e):
+                        log_message("CONSUMER", f"Gamma error: {str(e)}", "red")
+                        # If we get a non-timeout error, try to reconnect
+                        try:
+                            if consumers['gamma']:
+                                consumers['gamma'].close()
+                            if consumer_clients['gamma']:
+                                consumer_clients['gamma'].close()
+                        except:
+                            pass
+                        consumers['gamma'] = None
+                        consumer_clients['gamma'] = None
+                        gamma_failed = True
+
+            # Try to reconnect to failed clusters
+            if alpha_failed and not connect_consumer('alpha'):
+                time.sleep(0.1)  # Small delay to avoid hammering the cluster
+            if beta_failed and not connect_consumer('beta'):
+                time.sleep(0.1)
+            if gamma_failed and not connect_consumer('gamma'):
+                time.sleep(0.1)
 
         except Exception as e:
             log_message("CONSUMER", f"Error: {str(e)}", "red")
             time.sleep(1)
 
-    # Clean up
-    try:
-        consumer_alpha.close()
-        consumer_beta.close()
-        consumer_gamma.close()
-        client_alpha.close()
-        client_beta.close()
-        client_gamma.close()
-    except Exception as e:
-        log_message("CONSUMER", f"Error during cleanup: {str(e)}", "red")
+    # Clean up all consumers and clients
+    for cluster in ['alpha', 'beta', 'gamma']:
+        try:
+            if consumers[cluster]:
+                consumers[cluster].close()
+                consumers[cluster] = None
+            if consumer_clients[cluster]:
+                consumer_clients[cluster].close()
+                consumer_clients[cluster] = None
+        except Exception as e:
+            log_message("CONSUMER", f"Error during cleanup of {cluster}: {str(e)}", "red")
 
     log_message("CONSUMER", "Consumer task completed", "green")
     log_message("SUMMARY", f"Received {len(received_messages)} unique messages", "yellow")
@@ -295,6 +432,7 @@ def process_message(msg, consumer, source):
         if not is_duplicate:
             message_counts[f'{source}_received'] += 1
             message_counts['unique_total'] = len(received_messages)
+            message_counts['end_to_end_success'] += 1
 
         # Log the message
         status = ""
@@ -340,7 +478,7 @@ def monitor_clusters():
             log_message("MONITOR", "Alpha cluster is back up", "green")
             alpha_failed = False
 
-        # Check beta cluster
+        # Check the beta cluster
         beta_running = check_cluster_status("beta")
         if not beta_running and not beta_failed:
             log_message("MONITOR", "Beta cluster is down", "yellow")
@@ -366,28 +504,59 @@ def simulate_failures():
     Legacy function for simulating failures in-process.
     This is kept for backward compatibility but is not used when running with the chaos script.
     """
-    global alpha_failed
+    global alpha_failed, beta_failed, gamma_failed
     while running:
-        # Wait for a random time between 15-30 seconds
-        sleep_time = random.randint(15, 30)
+        # Wait for a random time between min_interval and max_interval seconds
+        sleep_time = random.randint(chaos_params['min_interval'], chaos_params['max_interval'])
         time.sleep(sleep_time)
 
-        if random.random() < 0.7:  # 70% chance of failure
-            log_message("SIMULATOR", "Simulating alpha cluster failure", "yellow")
-            alpha_failed = True
+        if random.random() < chaos_params['failure_probability']:
+            # Choose a random cluster to fail
+            cluster = random.choice(['alpha', 'beta', 'gamma'])
 
-            # Keep alpha down for 5-10 seconds
-            failure_duration = random.randint(5, 10)
-            time.sleep(failure_duration)
+            if cluster == 'alpha':
+                log_message("SIMULATOR", "Simulating alpha cluster failure", "yellow")
+                alpha_failed = True
 
-            log_message("SIMULATOR", "Alpha cluster recovered", "green")
-            alpha_failed = False
+                # Keep alpha down for a random time between min_downtime and max_downtime
+                failure_duration = random.randint(chaos_params['min_downtime'], chaos_params['max_downtime'])
+                time.sleep(failure_duration)
+
+                log_message("SIMULATOR", "Alpha cluster recovered", "green")
+                alpha_failed = False
+
+            elif cluster == 'beta':
+                log_message("SIMULATOR", "Simulating beta cluster failure", "yellow")
+                beta_failed = True
+
+                # Keep beta down for a random time between min_downtime and max_downtime
+                failure_duration = random.randint(chaos_params['min_downtime'], chaos_params['max_downtime'])
+                time.sleep(failure_duration)
+
+                log_message("SIMULATOR", "Beta cluster recovered", "green")
+                beta_failed = False
+
+            elif cluster == 'gamma':
+                log_message("SIMULATOR", "Simulating gamma cluster failure", "yellow")
+                gamma_failed = True
+
+                # Keep gamma down for a random time between min_downtime and max_downtime
+                failure_duration = random.randint(chaos_params['min_downtime'], chaos_params['max_downtime'])
+                time.sleep(failure_duration)
+
+                log_message("SIMULATOR", "Gamma cluster recovered", "green")
+                gamma_failed = False
 
 def create_counter_window():
     # Create a separate figure for counters
-    counter_fig = plt.figure(figsize=(8, 4))
-    counter_fig.suptitle('Message Counters', fontsize=16)
-    counter_ax = counter_fig.add_subplot(111)
+    counter_fig = plt.figure(figsize=(8, 6))  # Increased height for sliders
+    counter_fig.suptitle('Message Counters & Controls', fontsize=16)
+
+    # Create grid spec for layout
+    gs = plt.GridSpec(2, 1, height_ratios=[3, 1], figure=counter_fig)
+
+    # Counter area
+    counter_ax = counter_fig.add_subplot(gs[0])
 
     # Set axis limits and remove ticks
     counter_ax.set_xlim(0, 1)
@@ -395,36 +564,113 @@ def create_counter_window():
     counter_ax.set_xticks([])
     counter_ax.set_yticks([])
 
-    return counter_fig, counter_ax
+    # Slider area
+    slider_ax = counter_fig.add_subplot(gs[1])
+    slider_ax.set_title('Chaos Parameters', fontsize=12)
+
+    # Create sliders
+    from matplotlib.widgets import Slider
+
+    # Failure probability slider
+    failure_prob_ax = plt.axes([0.2, 0.15, 0.65, 0.03])
+    failure_prob_slider = Slider(
+        ax=failure_prob_ax,
+        label='Failure Probability',
+        valmin=0.0,
+        valmax=1.0,
+        valinit=0.7,
+        valstep=0.05
+    )
+
+    # Downtime slider (min/max)
+    downtime_ax = plt.axes([0.2, 0.1, 0.65, 0.03])
+    downtime_slider = Slider(
+        ax=downtime_ax,
+        label='Max Downtime (s)',
+        valmin=5,
+        valmax=60,
+        valinit=30,
+        valstep=5
+    )
+
+    # Interval slider (min/max)
+    interval_ax = plt.axes([0.2, 0.05, 0.65, 0.03])
+    interval_slider = Slider(
+        ax=interval_ax,
+        label='Min Interval (s)',
+        valmin=10,
+        valmax=120,
+        valinit=30,
+        valstep=10
+    )
+
+    # Hide the main slider axis
+    slider_ax.set_visible(False)
+
+    return counter_fig, counter_ax, failure_prob_slider, downtime_slider, interval_slider
 
 def create_visualization():
     # Create figure and subplots
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
     fig.suptitle('Pulsar Message Flow Visualization', fontsize=16)
 
-    # Create counter window
-    counter_fig, counter_ax = create_counter_window()
+    # Create counter window with sliders
+    counter_fig, counter_ax, failure_prob_slider, downtime_slider, interval_slider = create_counter_window()
+
+    # Connect sliders to update chaos parameters
+    def update_failure_prob(val):
+        chaos_params['failure_probability'] = val
+
+    def update_downtime(val):
+        chaos_params['max_downtime'] = val
+        chaos_params['min_downtime'] = max(5, val // 2)  # Set min to half of max or 5, whichever is larger
+
+    def update_interval(val):
+        chaos_params['min_interval'] = val
+        chaos_params['max_interval'] = val * 2  # Set max to double of min
+
+    # Register callbacks
+    failure_prob_slider.on_changed(update_failure_prob)
+    downtime_slider.on_changed(update_downtime)
+    interval_slider.on_changed(update_interval)
 
     # Create rectangles for clusters and components
-    producer_rect = patches.Rectangle((0.1, 0.6), 0.2, 0.3, linewidth=2, edgecolor='blue', facecolor='lightblue', label='Producer')
+    # Producer rectangles for each cluster
+    producer_alpha_rect = patches.Rectangle((0.05, 0.8), 0.15, 0.15, linewidth=2, edgecolor='blue', facecolor='lightblue', label='Alpha Producer')
+    producer_beta_rect = patches.Rectangle((0.05, 0.55), 0.15, 0.15, linewidth=2, edgecolor='blue', facecolor='lightblue', label='Beta Producer')
+    producer_gamma_rect = patches.Rectangle((0.05, 0.3), 0.15, 0.15, linewidth=2, edgecolor='blue', facecolor='lightblue', label='Gamma Producer')
+
+    # Cluster rectangles
     alpha_rect = patches.Rectangle((0.5, 0.8), 0.2, 0.15, linewidth=2, edgecolor='green', facecolor='lightgreen', label='Alpha Cluster')
     beta_rect = patches.Rectangle((0.5, 0.55), 0.2, 0.15, linewidth=2, edgecolor='orange', facecolor='lightsalmon', label='Beta Cluster')
     gamma_rect = patches.Rectangle((0.5, 0.3), 0.2, 0.15, linewidth=2, edgecolor='red', facecolor='lightcoral', label='Gamma Cluster')
-    consumer_rect = patches.Rectangle((0.8, 0.6), 0.2, 0.3, linewidth=2, edgecolor='purple', facecolor='plum', label='Consumer')
+
+    # Consumer rectangles for each cluster
+    consumer_alpha_rect = patches.Rectangle((0.8, 0.8), 0.15, 0.15, linewidth=2, edgecolor='purple', facecolor='plum', label='Alpha Consumer')
+    consumer_beta_rect = patches.Rectangle((0.8, 0.55), 0.15, 0.15, linewidth=2, edgecolor='purple', facecolor='plum', label='Beta Consumer')
+    consumer_gamma_rect = patches.Rectangle((0.8, 0.3), 0.15, 0.15, linewidth=2, edgecolor='purple', facecolor='plum', label='Gamma Consumer')
 
     # Add rectangles to the plot
-    ax1.add_patch(producer_rect)
+    ax1.add_patch(producer_alpha_rect)
+    ax1.add_patch(producer_beta_rect)
+    ax1.add_patch(producer_gamma_rect)
     ax1.add_patch(alpha_rect)
     ax1.add_patch(beta_rect)
     ax1.add_patch(gamma_rect)
-    ax1.add_patch(consumer_rect)
+    ax1.add_patch(consumer_alpha_rect)
+    ax1.add_patch(consumer_beta_rect)
+    ax1.add_patch(consumer_gamma_rect)
 
     # Add labels
-    ax1.text(0.2, 0.75, 'Producer', ha='center')
+    ax1.text(0.125, 0.875, 'Alpha\nProducer', ha='center')
+    ax1.text(0.125, 0.625, 'Beta\nProducer', ha='center')
+    ax1.text(0.125, 0.375, 'Gamma\nProducer', ha='center')
     ax1.text(0.6, 0.875, 'Alpha', ha='center')
     ax1.text(0.6, 0.625, 'Beta', ha='center')
     ax1.text(0.6, 0.375, 'Gamma', ha='center')
-    ax1.text(0.9, 0.75, 'Consumer', ha='center')
+    ax1.text(0.875, 0.875, 'Alpha\nConsumer', ha='center')
+    ax1.text(0.875, 0.625, 'Beta\nConsumer', ha='center')
+    ax1.text(0.875, 0.375, 'Gamma\nConsumer', ha='center')
 
     # Set axis limits and remove ticks
     ax1.set_xlim(0, 1.1)
@@ -448,6 +694,14 @@ def create_visualization():
     alpha_to_consumer_msgs = ax1.scatter([], [], c='green', s=50, alpha=0.7)
     beta_to_consumer_msgs = ax1.scatter([], [], c='orange', s=50, alpha=0.7)
     gamma_to_consumer_msgs = ax1.scatter([], [], c='red', s=50, alpha=0.7)
+
+    # Create text objects for connection status
+    producer_alpha_status = ax1.text(0.125, 0.825, "", ha='center', fontsize=8, color='black')
+    producer_beta_status = ax1.text(0.125, 0.575, "", ha='center', fontsize=8, color='black')
+    producer_gamma_status = ax1.text(0.125, 0.325, "", ha='center', fontsize=8, color='black')
+    consumer_alpha_status = ax1.text(0.875, 0.825, "", ha='center', fontsize=8, color='black')
+    consumer_beta_status = ax1.text(0.875, 0.575, "", ha='center', fontsize=8, color='black')
+    consumer_gamma_status = ax1.text(0.875, 0.325, "", ha='center', fontsize=8, color='black')
 
     # Create a line for latency plot
     latency_line, = ax2.plot([], [], 'b-', lw=2)
@@ -477,6 +731,14 @@ def create_visualization():
         status_text += f"Duplicates: {len(messages_data['duplicates'])} | "
         status_text += f"Out-of-order: {len(messages_data['out_of_order'])}"
 
+        # Calculate success rate
+        success_rate = 0
+        if message_counts['total_sent'] > 0:
+            success_rate = (message_counts['end_to_end_success'] / message_counts['total_sent']) * 100
+
+        # Add success rate to status text
+        success_text = f"Success Rate: {success_rate:.2f}% ({message_counts['end_to_end_success']}/{message_counts['total_sent']})"
+
         # Create cluster-specific status text
         alpha_text = f"Alpha: Sent {message_counts['alpha_sent']} | Received {message_counts['alpha_received']}"
         beta_text = f"Beta: Sent {message_counts['beta_sent']} | Received {message_counts['beta_received']}"
@@ -484,6 +746,10 @@ def create_visualization():
 
         # Add main status text at the top
         counter_ax.text(0.5, 0.8, status_text, ha='center', fontsize=12, 
+                 bbox=dict(facecolor='white', alpha=0.9, boxstyle='round,pad=0.5'))
+
+        # Add success rate text below the main status
+        counter_ax.text(0.5, 0.7, success_text, ha='center', fontsize=12, 
                  bbox=dict(facecolor='white', alpha=0.9, boxstyle='round,pad=0.5'))
 
         # Add cluster-specific status text
@@ -501,19 +767,40 @@ def create_visualization():
         # Update message flow visualization
 
         # Define the fixed positions for the components
-        producer_pos = (0.2, 0.75)
+        producer_alpha_pos = (0.125, 0.875)
+        producer_beta_pos = (0.125, 0.625)
+        producer_gamma_pos = (0.125, 0.375)
         alpha_pos = (0.6, 0.875)
         beta_pos = (0.6, 0.625)
         gamma_pos = (0.6, 0.375)
-        consumer_pos = (0.9, 0.75)
+        consumer_alpha_pos = (0.875, 0.875)
+        consumer_beta_pos = (0.875, 0.625)
+        consumer_gamma_pos = (0.875, 0.375)
 
         # Set the fixed lines for the message paths
-        producer_to_alpha_line.set_data([producer_pos[0], alpha_pos[0]], [producer_pos[1], alpha_pos[1]])
-        producer_to_beta_line.set_data([producer_pos[0], beta_pos[0]], [producer_pos[1], beta_pos[1]])
-        producer_to_gamma_line.set_data([producer_pos[0], gamma_pos[0]], [producer_pos[1], gamma_pos[1]])
-        alpha_to_consumer_line.set_data([alpha_pos[0], consumer_pos[0]], [alpha_pos[1], consumer_pos[1]])
-        beta_to_consumer_line.set_data([beta_pos[0], consumer_pos[0]], [beta_pos[1], consumer_pos[1]])
-        gamma_to_consumer_line.set_data([gamma_pos[0], consumer_pos[0]], [gamma_pos[1], consumer_pos[1]])
+        producer_to_alpha_line.set_data([producer_alpha_pos[0], alpha_pos[0]], [producer_alpha_pos[1], alpha_pos[1]])
+        producer_to_beta_line.set_data([producer_beta_pos[0], beta_pos[0]], [producer_beta_pos[1], beta_pos[1]])
+        producer_to_gamma_line.set_data([producer_gamma_pos[0], gamma_pos[0]], [producer_gamma_pos[1], gamma_pos[1]])
+        alpha_to_consumer_line.set_data([alpha_pos[0], consumer_alpha_pos[0]], [alpha_pos[1], consumer_alpha_pos[1]])
+        beta_to_consumer_line.set_data([beta_pos[0], consumer_beta_pos[0]], [beta_pos[1], consumer_beta_pos[1]])
+        gamma_to_consumer_line.set_data([gamma_pos[0], consumer_gamma_pos[0]], [gamma_pos[1], consumer_gamma_pos[1]])
+
+        # Update connection status text
+        # Producer status
+        producer_alpha_status.set_text("Connected" if producers['alpha'] is not None else "Disconnected")
+        producer_alpha_status.set_color("green" if producers['alpha'] is not None else "red")
+        producer_beta_status.set_text("Connected" if producers['beta'] is not None else "Disconnected")
+        producer_beta_status.set_color("green" if producers['beta'] is not None else "red")
+        producer_gamma_status.set_text("Connected" if producers['gamma'] is not None else "Disconnected")
+        producer_gamma_status.set_color("green" if producers['gamma'] is not None else "red")
+
+        # Consumer status
+        consumer_alpha_status.set_text("Connected" if consumers['alpha'] is not None else "Disconnected")
+        consumer_alpha_status.set_color("green" if consumers['alpha'] is not None else "red")
+        consumer_beta_status.set_text("Connected" if consumers['beta'] is not None else "Disconnected")
+        consumer_beta_status.set_color("green" if consumers['beta'] is not None else "red")
+        consumer_gamma_status.set_text("Connected" if consumers['gamma'] is not None else "Disconnected")
+        consumer_gamma_status.set_color("green" if consumers['gamma'] is not None else "red")
 
         # Animate messages along the paths
         # This is simplified - in a real implementation, you'd animate the messages moving along the paths
@@ -548,13 +835,15 @@ def create_visualization():
         duplicate_markers.set_offsets(np.column_stack([duplicate_x, duplicate_y]) if duplicate_x else np.empty((0, 2)))
         out_of_order_markers.set_offsets(np.column_stack([out_of_order_x, out_of_order_y]) if out_of_order_x else np.empty((0, 2)))
 
-        # Update the counter window
+        # Update the counter-window
         update_counter(frame)
 
         return (producer_to_alpha_line, producer_to_beta_line, producer_to_gamma_line,
                 alpha_to_consumer_line, beta_to_consumer_line, gamma_to_consumer_line,
                 producer_to_alpha_msgs, producer_to_beta_msgs, producer_to_gamma_msgs,
                 alpha_to_consumer_msgs, beta_to_consumer_msgs, gamma_to_consumer_msgs,
+                producer_alpha_status, producer_beta_status, producer_gamma_status,
+                consumer_alpha_status, consumer_beta_status, consumer_gamma_status,
                 latency_line, duplicate_markers, out_of_order_markers)
 
     # Create animation for main visualization
