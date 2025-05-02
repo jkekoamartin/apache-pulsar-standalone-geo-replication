@@ -147,11 +147,29 @@ Alternatively, you can follow these manual steps (assuming you've sourced the al
     ```
 
 # Test geo replication
+
+## Basic CLI Test
 To test geo replication we create three different consumers, one for each standalone cluster and then produce messages. On successful execution all three consumers should see all messages.
 
 Note that subscriptions are *exclusive* per default but that only applies to consumers within the same cluster.
 
 **Important**: Always start the consumers before producing messages to ensure no messages are missed. Use the `-p Earliest` flag to make sure consumers receive all messages, including those that were sent before the consumer started.
+
+## Python Demo Application
+A Python demo application is included that demonstrates:
+
+1. Producer failover from alpha to beta cluster
+2. Shared subscription usage
+3. Duplicate and out-of-order message handling
+4. Live visualization of message flow
+
+To run the Python demo:
+
+```
+./run_demo.sh
+```
+
+See [PYTHON_README.md](PYTHON_README.md) for more details.
 
 1. Open three shells and make sure that each shell is initialized with `source alias.sh` or else the aliases will not work.
 2. In each shell start a consumer on the `acme/test/hello` topic with the `-p Earliest` flag to receive messages from the beginning:
