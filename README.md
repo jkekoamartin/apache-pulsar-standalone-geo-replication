@@ -96,6 +96,8 @@ To deploy the clusters run `deploy.sh` - or - do the following manually
           cat spec/standalone.yaml | name=${cluster} ./mo | kubectl -n pulsar apply -f -
         done
 
+> **Note**: The deployment uses the `apachepulsar/pulsar-all:latest` image. If you encounter issues, you might want to modify the spec/standalone.yaml file to use a specific version tag instead of "latest" to ensure compatibility.
+
 The [spec/standalone.yaml] file defines a Kubernetes Service and Deployment with a `{{name}}` placeholder. If you prefer, you can create three different files and do a `kubectl -n pulsar apply -f {filename}` three times instead.
 
 # Create alias
@@ -120,6 +122,14 @@ To configure [geo replication](https://pulsar.apache.org/docs/en/administration-
 
 * Tell each standalone cluster (**alpha**, **beta** and **gamma**) that the other clusters exist
 * Configure a tenant (`acme`) and namespace (`acme/test`) that uses all three clusters for replication
+
+You can either run the provided `configure.sh` script to automate these steps:
+
+```
+./configure.sh
+```
+
+Or follow the manual steps below:
 
 1. Configure the **alpha** cluster
 
@@ -171,7 +181,7 @@ Note that subscriptions are *exclusive* per default but that only applies to con
 1. Open three shells and make sure that each shell is initialized with `source alias.sh` or else the alias will not work.
 1. In each shell consume 10 messages on the `acme/test/hello` topic
     ```
-    alpha-client consume -n 10 -s hello acme/test/hell
+    alpha-client consume -n 10 -s hello acme/test/hello
 
     beta-client consume -n 10 -s hello acme/test/hello
 
