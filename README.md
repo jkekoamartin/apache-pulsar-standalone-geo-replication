@@ -9,9 +9,15 @@ As the configuration was not evident (at least to me) I thought it could be inte
 
 
 # Prerequisites
-This example is based on Kubernetes and an up-and-running cluster is a prerequisite. If you don't already haver one installing [minkube](https://kubernetes.io/docs/setup/learning-environment/minikube/) or [Docker](https://docs.docker.com/) is probabley the easiest.
+This example can be run using either Kubernetes or Docker. 
 
-For this excervise I used Docker on Mac but there is no reason it would not work on other vanilla Kubernetes installations.
+## Kubernetes Setup
+If you want to use Kubernetes, an up-and-running cluster is a prerequisite. If you don't already have one, installing [minikube](https://kubernetes.io/docs/setup/learning-environment/minikube/) is probably the easiest.
+
+## Docker Setup
+Alternatively, you can use Docker with Docker Compose to run the demo without Kubernetes. This requires:
+- [Docker](https://docs.docker.com/) installed on your machine
+- [Docker Compose](https://docs.docker.com/compose/install/) installed on your machine
 
 # Install the Kubernetes dashboard (optional)
 
@@ -66,17 +72,18 @@ The Kubernetes web site provides [detailed instructions](https://kubernetes.io/d
 1. [Access the dashboard](http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy/.) and nter the token saved in the step above!
 
 # Deploy Apache Pulsar
-To simulate a geographically distributed Pulsar cluster we are using a multiple [standalone brokers](https://pulsar.apache.org/docs/en/standalone/) running in the same Kubernetes namespace.
+To simulate a geographically distributed Pulsar cluster we are using multiple [standalone brokers](https://pulsar.apache.org/docs/en/standalone/) running either in the same Kubernetes namespace or as Docker containers.
 
-Admittedly this overly simplistic, but given resource constraints on a local workstation a full-blown cluster with separate zookepper, bookies, proxies etc is probably infeasible.
+Admittedly this is overly simplistic, but given resource constraints on a local workstation a full-blown cluster with separate zookeeper, bookies, proxies etc is probably infeasible.
 
-From a purly functional perspeective it should not matter, however. We can still play around with the different clusters as-if they were deployed in different geographic locations.
+From a purely functional perspective it should not matter, however. We can still play around with the different clusters as-if they were deployed in different geographic locations.
 
-**In order for the setup to work properly, the default broker name (`standlone`) must be globally unique or the cluster repllication will not work properly. This is done by configuring the `clusterName` option.**
+**In order for the setup to work properly, the default broker name (`standalone`) must be globally unique or the cluster replication will not work properly. This is done by configuring the `clusterName` option.**
 
-To deploy the clusters run `deploy.sh` - or - do the following manually
+## Deploy with Kubernetes
+To deploy the clusters using Kubernetes, run `deploy.sh` - or - do the following manually:
 
-1. Define a test namespace `pulsar``
+1. Define a test namespace `pulsar`
 
         kubectl apply -f spec/namespace.yaml
 
@@ -100,36 +107,112 @@ To deploy the clusters run `deploy.sh` - or - do the following manually
 
 The [spec/standalone.yaml] file defines a Kubernetes Service and Deployment with a `{{name}}` placeholder. If you prefer, you can create three different files and do a `kubectl -n pulsar apply -f {filename}` three times instead.
 
+## Deploy with Docker
+To deploy the clusters using Docker, you can either use the automated script or follow the manual steps.
+
+### Automated Deployment
+Run the provided `deploy.sh.docker` script to automate the deployment process:
+
+```
+chmod +x deploy.sh.docker
+./deploy.sh.docker
+```
+
+This script will:
+1. Start the Docker containers
+2. Wait for them to be ready
+3. Set up the aliases
+4. Configure geo replication
+5. Provide instructions for testing
+
+### Manual Deployment
+Alternatively, you can follow these manual steps:
+
+1. Start the containers using Docker Compose:
+
+        docker-compose up -d
+
+   This will start three Pulsar standalone brokers named **alpha**, **beta**, and **gamma**.
+
+2. Verify that all containers are running:
+
+        docker-compose ps
+
+   All three containers should be in the "Up" state.
+
+3. Set up the aliases:
+
+        source alias.sh.docker
+
+4. Configure geo replication:
+
+        ./configure.sh.docker
+
+> **Note**: The Docker Compose setup uses the `apachepulsar/pulsar-all:2.10.0` image with specific port mappings:
+> - alpha: 8080:8080 (HTTP) and 6650:6650 (Pulsar)
+> - beta: 8081:8080 (HTTP) and 6651:6650 (Pulsar)
+> - gamma: 8082:8080 (HTTP) and 6652:6650 (Pulsar)
+
 # Create alias
-Apache pulsar provides `pulsar-admin` for administration and `pulsar-client` for producing and consuming test messages. The  utilities are part of the base pulsar image and can be executed by attaching to the container with `kubectl exec`, for example:
+Apache Pulsar provides `pulsar-admin` for administration and `pulsar-client` for producing and consuming test messages. These utilities are part of the base Pulsar image and can be executed by attaching to the container.
 
-```
-kubectl -n {namespace} exec {pod} -it -- bin/pulsar-admin
-```
-To work efficiently it is convenient to use alias and the following are assumed from here on:
+To work efficiently, it is convenient to use aliases for these commands. The following aliases are used throughout this guide:
 
-* `{cluster}-admin` - adminstration of a cluster
+* `{cluster}-admin` - administration of a cluster
 * `{cluster}-client` - produce/consume messages for a cluster
 
-For each shell where you want to work with the clusters you should execute `source alias.sh` in the shell.
+## Kubernetes Aliases
+For Kubernetes deployment, execute the following in each shell where you want to work with the clusters:
 
-Note that in the official Pulsar documentation for [deploying pulsar on Kubernetes](https://pulsar.apache.org/docs/en/deploy-kubernetes/), a `pulsar-admin` alias is configured to execute the `bin/pulsar-admin` binary in a container separate from the brokers. As we have a highly simpliefied with only one standalone broker per cluster we don't need this and can instead attached directly to the running broker containers. This reduces resource consumption on the local workstation or laptop.
+```
+source alias.sh
+```
 
-**The next steps assumes that you are running a shell that has been configured with the alias above!**
+This creates aliases that use `kubectl exec` to run commands in the Pulsar containers, for example:
+
+```
+kubectl -n pulsar exec {pod} -it -- bin/pulsar-admin
+```
+
+## Docker Aliases
+For Docker deployment, execute the following in each shell where you want to work with the clusters:
+
+```
+source alias.sh.docker
+```
+
+This creates aliases that use `docker exec` to run commands in the Pulsar containers, for example:
+
+```
+docker exec -it {container} bin/pulsar-admin
+```
+
+Note that in the official Pulsar documentation for [deploying Pulsar on Kubernetes](https://pulsar.apache.org/docs/en/deploy-kubernetes/), a `pulsar-admin` alias is configured to execute the `bin/pulsar-admin` binary in a container separate from the brokers. As we have a highly simplified setup with only one standalone broker per cluster, we don't need this and can instead attach directly to the running broker containers. This reduces resource consumption on the local workstation or laptop.
+
+**The next steps assume that you are running a shell that has been configured with the appropriate aliases!**
 
 # Configure geo replication
-To configure [geo replication](https://pulsar.apache.org/docs/en/administration-geo/) we need to
+To configure [geo replication](https://pulsar.apache.org/docs/en/administration-geo/) we need to:
 
 * Tell each standalone cluster (**alpha**, **beta** and **gamma**) that the other clusters exist
 * Configure a tenant (`acme`) and namespace (`acme/test`) that uses all three clusters for replication
 
-You can either run the provided `configure.sh` script to automate these steps:
+## Configure with Kubernetes
+For Kubernetes deployment, you can either run the provided `configure.sh` script to automate these steps:
 
 ```
 ./configure.sh
 ```
 
-Or follow the manual steps below:
+## Configure with Docker
+For Docker deployment, you can run the provided `configure.sh.docker` script to automate these steps:
+
+```
+./configure.sh.docker
+```
+
+## Manual Configuration Steps
+Alternatively, you can follow these manual steps (the commands are the same for both Kubernetes and Docker, assuming you've sourced the appropriate alias file):
 
 1. Configure the **alpha** cluster
 
@@ -141,7 +224,7 @@ Or follow the manual steps below:
     ```
     alpha-admin clusters create --url http://gamma:8080 --broker-url pulsar://gamma:6650 gamma
     ```
-    Create the the **acme** tenant in alpha and allow it to use clusters **alpha**, **beta** and **gamma**:
+    Create the **acme** tenant in alpha and allow it to use clusters **alpha**, **beta** and **gamma**:
     ```
     alpha-admin tenants create --allowed-clusters alpha,beta,gamma acme
     ```
@@ -178,17 +261,58 @@ To test geo replication we create three different consumers, one for each standa
 
 Note that subscriptions are *exclusive* per default but that only applies to consumers within the same cluster.
 
-1. Open three shells and make sure that each shell is initialized with `source alias.sh` or else the alias will not work.
-1. In each shell consume 10 messages on the `acme/test/hello` topic
-    ```
-    alpha-client consume -n 10 -s hello acme/test/hello
+**Important**: Always start the consumers before producing messages to ensure no messages are missed. Use the `-p Earliest` flag to make sure consumers receive all messages, including those that were sent before the consumer started.
 
-    beta-client consume -n 10 -s hello acme/test/hello
+## Test with Kubernetes
+For Kubernetes deployment:
 
-    gamma-client consume -n 10 -s hello acme/test/hello
+1. Open three shells and make sure that each shell is initialized with `source alias.sh` or else the aliases will not work.
+2. In each shell start a consumer on the `acme/test/hello` topic with the `-p Earliest` flag to receive messages from the beginning:
     ```
-1. In a fourth shell produce 10 messages on the `acme/test/hello` topic
+    alpha-client consume -n 10 -s hello -p Earliest acme/test/hello
+
+    beta-client consume -n 10 -s hello -p Earliest acme/test/hello
+
+    gamma-client consume -n 10 -s hello -p Earliest acme/test/hello
+    ```
+3. In a fourth shell produce 10 messages on the `acme/test/hello` topic
     ```
     alpha-client produce -n 10 -m hello acme/test/hello
     ```
-1. Verify that each cluster has consumed its ten messages and then exited!
+4. Verify that each cluster has consumed its ten messages and then exited!
+
+## Test with Docker
+For Docker deployment:
+
+1. Open three shells and make sure that each shell is initialized with `source alias.sh.docker` or else the aliases will not work.
+2. In each shell start a consumer on the `acme/test/hello` topic with the `-p Earliest` flag to receive messages from the beginning:
+    ```
+    alpha-client consume -n 10 -s hello -p Earliest acme/test/hello
+
+    beta-client consume -n 10 -s hello -p Earliest acme/test/hello
+
+    gamma-client consume -n 10 -s hello -p Earliest acme/test/hello
+    ```
+3. In a fourth shell produce 10 messages on the `acme/test/hello` topic
+    ```
+    alpha-client produce -n 10 -m hello acme/test/hello
+    ```
+4. Verify that each cluster has consumed its ten messages and then exited!
+
+## Cleanup
+
+### Kubernetes Cleanup
+To clean up the Kubernetes resources:
+
+```
+kubectl delete namespace pulsar
+```
+
+### Docker Cleanup
+To clean up the Docker resources:
+
+```
+docker-compose down -v
+```
+
+This will stop and remove the containers, networks, and volumes created by Docker Compose.

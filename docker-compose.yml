@@ -1,0 +1,88 @@
+version: '3'
+
+services:
+  alpha:
+    image: apachepulsar/pulsar-all:2.10.0
+    container_name: alpha
+    hostname: alpha
+    user: root
+    command: >
+      /bin/bash -c "
+      mkdir -p /pulsar/data/standalone &&
+      chmod -R 777 /pulsar/data &&
+      bin/apply-config-from-env.py conf/standalone.conf &&
+      bin/gen-yml-from-env.py conf/functions_worker.yml &&
+      bin/pulsar standalone -nss -nfw"
+    environment:
+      - clusterName=alpha
+      - PULSAR_MEM=-Xms128m -Xmx512m -XX:MaxDirectMemorySize=512m
+      - functionsWorkerEnabled=true
+    ports:
+      - "8080:8080"
+      - "6650:6650"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/admin/v2/brokers/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - alpha-data:/pulsar/data
+
+  beta:
+    image: apachepulsar/pulsar-all:2.10.0
+    container_name: beta
+    hostname: beta
+    user: root
+    command: >
+      /bin/bash -c "
+      mkdir -p /pulsar/data/standalone &&
+      chmod -R 777 /pulsar/data &&
+      bin/apply-config-from-env.py conf/standalone.conf &&
+      bin/gen-yml-from-env.py conf/functions_worker.yml &&
+      bin/pulsar standalone -nss -nfw"
+    environment:
+      - clusterName=beta
+      - PULSAR_MEM=-Xms128m -Xmx512m -XX:MaxDirectMemorySize=512m
+      - functionsWorkerEnabled=true
+    ports:
+      - "8081:8080"
+      - "6651:6650"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/admin/v2/brokers/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - beta-data:/pulsar/data
+
+  gamma:
+    image: apachepulsar/pulsar-all:2.10.0
+    container_name: gamma
+    hostname: gamma
+    user: root
+    command: >
+      /bin/bash -c "
+      mkdir -p /pulsar/data/standalone &&
+      chmod -R 777 /pulsar/data &&
+      bin/apply-config-from-env.py conf/standalone.conf &&
+      bin/gen-yml-from-env.py conf/functions_worker.yml &&
+      bin/pulsar standalone -nss -nfw"
+    environment:
+      - clusterName=gamma
+      - PULSAR_MEM=-Xms128m -Xmx512m -XX:MaxDirectMemorySize=512m
+      - functionsWorkerEnabled=true
+    ports:
+      - "8082:8080"
+      - "6652:6650"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/admin/v2/brokers/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - gamma-data:/pulsar/data
+
+volumes:
+  alpha-data:
+  beta-data:
+  gamma-data:
