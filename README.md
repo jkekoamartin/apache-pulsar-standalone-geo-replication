@@ -169,6 +169,20 @@ To run the Python demo:
 ./run_demo.sh
 ```
 
+### Chaos Testing Demo
+
+For a more realistic demonstration of cluster failures, you can use the chaos testing script that randomly shuts down and restarts clusters:
+
+```
+./run_chaos_demo.sh
+```
+
+This script:
+- Starts the demo application with real-time cluster health monitoring
+- Runs a chaos script in the background that randomly stops and starts the Pulsar clusters
+- Shows health indicators for all three clusters in the visualization
+- Demonstrates how the system handles real cluster failures and recoveries
+
 See [PYTHON_README.md](PYTHON_README.md) for more details.
 
 1. Open three shells and make sure that each shell is initialized with `source alias.sh` or else the aliases will not work.

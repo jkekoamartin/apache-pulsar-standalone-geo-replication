@@ -27,18 +27,46 @@ This Python application demonstrates Apache Pulsar's geo-replication capabilitie
 
 ## Running the Demo
 
+### Standard Demo
+
 1. Start the application:
+   ```
+   ./run_demo.sh
+   ```
+   or
    ```
    python pulsar_demo.py
    ```
 
 2. The application will:
    - Connect a producer to the alpha cluster
-   - Connect consumers to both alpha and beta clusters using a shared subscription
+   - Connect consumers to all three clusters using a shared subscription
    - Periodically simulate alpha cluster failures to demonstrate failover
    - Show a live visualization of message flow and latency
 
 3. Press Ctrl+C to exit the application
+
+### Chaos Testing Demo
+
+For a more realistic demonstration with actual cluster failures:
+
+1. Start the chaos demo:
+   ```
+   ./run_chaos_demo.sh
+   ```
+
+2. This will:
+   - Start the demo application with real-time cluster health monitoring
+   - Run a chaos script in the background that randomly stops and starts the Pulsar clusters
+   - Show health indicators for all three clusters in the visualization
+   - Demonstrate how the system handles real cluster failures and recoveries
+
+3. The chaos script (`chaos.py`) can also be run independently with custom parameters:
+   ```
+   ./chaos.py --min-interval 30 --max-interval 90 --min-downtime 10 --max-downtime 30 --failure-probability 0.7
+   ```
+
+4. Press Ctrl+C to exit the application
 
 ## Features Demonstrated
 
