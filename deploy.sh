@@ -1,20 +1,33 @@
 #!/bin/bash
-function get-mo () {
-  curl -sSL https://git.io/get-mo -o mo
-  chmod +x mo
-}
 
-# check if moustache bash script 'mo' is available, else download
-which mo > /dev/null || get-mo
+# Start the Docker containers
+echo "Starting Pulsar clusters with Docker Compose..."
+docker-compose up -d
 
-# create the pulsar namespace
-kubectl apply -f spec/namespace.yaml
+# Wait for the containers to be ready
+echo "Waiting for containers to be ready..."
+sleep 10
 
-# creeate configuration
-kubectl -n pulsar apply -f spec/config.yaml
+# Check if containers are running
+echo "Checking container status..."
+docker-compose ps
 
-#
-for cluster in alpha beta gamma
-do
-  cat spec/standalone.yaml | name=${cluster} ./mo | kubectl -n pulsar apply -f -
-done
+# Source the Docker aliases
+echo "Setting up aliases..."
+source alias.sh
+
+# Configure geo replication
+echo "Configuring geo replication..."
+./configure.sh
+
+echo "Deployment complete! You can now test geo replication."
+echo "To test, open three shells and run:"
+echo "  source alias.sh"
+echo "  alpha-client consume -n 10 -s hello -p Earliest acme/test/hello"
+echo "  beta-client consume -n 10 -s hello -p Earliest acme/test/hello"
+echo "  gamma-client consume -n 10 -s hello -p Earliest acme/test/hello"
+echo "Then in a fourth shell, run:"
+echo "  source alias.sh"
+echo "  alpha-client produce -n 10 -m hello acme/test/hello"
+echo "To clean up, run:"
+echo "  docker-compose down -v"
