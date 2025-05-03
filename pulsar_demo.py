@@ -300,96 +300,80 @@ def connect_consumer(cluster_name):
         log_message("CONSUMER", f"Failed to connect to {cluster_name} cluster: {str(e)}", "red")
         return False
 
-def consumer_task():
+def try_receive_message(cluster_name):
+    """
+    Try to receive a message from a specific cluster.
+    Returns True if successful or if it's just a timeout, False if there was an error.
+    """
     global alpha_failed, beta_failed, gamma_failed
 
-    # Connect to all clusters initially
-    alpha_connected = connect_consumer('alpha')
-    beta_connected = connect_consumer('beta')
-    gamma_connected = connect_consumer('gamma')
+    # Map cluster names to their failure flags
+    failure_map = {
+        'alpha': alpha_failed,
+        'beta': beta_failed,
+        'gamma': gamma_failed
+    }
 
-    # If we couldn't connect to any cluster, exit
-    if not (alpha_connected or beta_connected or gamma_connected):
-        log_message("CONSUMER", "Failed to connect to any cluster, exiting", "red")
-        return
+    # Skip if the cluster is marked as failed or consumer is None
+    if failure_map[cluster_name] or consumers[cluster_name] is None:
+        return True
 
-    log_message("CONSUMER", "Connected to clusters with shared subscription", "green")
+    try:
+        # Try to receive a message with timeout
+        msg = consumers[cluster_name].receive(timeout_millis=500)
+        process_message(msg, consumers[cluster_name], cluster_name)
+        return True
+    except Exception as e:
+        # Ignore timeout errors
+        if "Timeout" not in str(e):
+            log_message("CONSUMER", f"{cluster_name.capitalize()} error: {str(e)}", "red")
+            handle_consumer_error(cluster_name)
+            return False
+        return True
 
-    while running:
-        try:
-            # Try to receive from alpha
-            if not alpha_failed and consumers['alpha'] is not None:
-                try:
-                    msg_alpha = consumers['alpha'].receive(timeout_millis=500)
-                    process_message(msg_alpha, consumers['alpha'], 'alpha')
-                except Exception as e:
-                    if "Timeout" not in str(e):
-                        log_message("CONSUMER", f"Alpha error: {str(e)}", "red")
-                        # If we get a non-timeout error, try to reconnect
-                        try:
-                            if consumers['alpha']:
-                                consumers['alpha'].close()
-                            if consumer_clients['alpha']:
-                                consumer_clients['alpha'].close()
-                        except:
-                            pass
-                        consumers['alpha'] = None
-                        consumer_clients['alpha'] = None
-                        alpha_failed = True
+def handle_consumer_error(cluster_name):
+    """Handle consumer error by closing connections and marking the cluster as failed"""
+    global alpha_failed, beta_failed, gamma_failed
 
-            # Try to receive from beta
-            if not beta_failed and consumers['beta'] is not None:
-                try:
-                    msg_beta = consumers['beta'].receive(timeout_millis=500)
-                    process_message(msg_beta, consumers['beta'], 'beta')
-                except Exception as e:
-                    if "Timeout" not in str(e):
-                        log_message("CONSUMER", f"Beta error: {str(e)}", "red")
-                        # If we get a non-timeout error, try to reconnect
-                        try:
-                            if consumers['beta']:
-                                consumers['beta'].close()
-                            if consumer_clients['beta']:
-                                consumer_clients['beta'].close()
-                        except:
-                            pass
-                        consumers['beta'] = None
-                        consumer_clients['beta'] = None
-                        beta_failed = True
+    # Close connections
+    try:
+        if consumers[cluster_name]:
+            consumers[cluster_name].close()
+        if consumer_clients[cluster_name]:
+            consumer_clients[cluster_name].close()
+    except:
+        pass
 
-            # Try to receive from gamma
-            if not gamma_failed and consumers['gamma'] is not None:
-                try:
-                    msg_gamma = consumers['gamma'].receive(timeout_millis=500)
-                    process_message(msg_gamma, consumers['gamma'], 'gamma')
-                except Exception as e:
-                    if "Timeout" not in str(e):
-                        log_message("CONSUMER", f"Gamma error: {str(e)}", "red")
-                        # If we get a non-timeout error, try to reconnect
-                        try:
-                            if consumers['gamma']:
-                                consumers['gamma'].close()
-                            if consumer_clients['gamma']:
-                                consumer_clients['gamma'].close()
-                        except:
-                            pass
-                        consumers['gamma'] = None
-                        consumer_clients['gamma'] = None
-                        gamma_failed = True
+    # Clear references
+    consumers[cluster_name] = None
+    consumer_clients[cluster_name] = None
 
-            # Try to reconnect to failed clusters
-            if alpha_failed and not connect_consumer('alpha'):
-                time.sleep(0.1)  # Small delay to avoid hammering the cluster
-            if beta_failed and not connect_consumer('beta'):
-                time.sleep(0.1)
-            if gamma_failed and not connect_consumer('gamma'):
-                time.sleep(0.1)
+    # Set the appropriate failure flag
+    if cluster_name == 'alpha':
+        alpha_failed = True
+    elif cluster_name == 'beta':
+        beta_failed = True
+    elif cluster_name == 'gamma':
+        gamma_failed = True
 
-        except Exception as e:
-            log_message("CONSUMER", f"Error: {str(e)}", "red")
-            time.sleep(1)
+def try_reconnect_failed_clusters():
+    """Try to reconnect to any failed clusters"""
+    global alpha_failed, beta_failed, gamma_failed
 
-    # Clean up all consumers and clients
+    # Map cluster names to their failure flags
+    failure_map = {
+        'alpha': alpha_failed,
+        'beta': beta_failed,
+        'gamma': gamma_failed
+    }
+
+    # Try to reconnect to each failed cluster
+    for cluster, failed in failure_map.items():
+        if failed and not connect_consumer(cluster):
+            time.sleep(0.1)  # Small delay to avoid hammering the cluster
+
+def cleanup_consumers():
+    """Clean up all consumer connections"""
     for cluster in ['alpha', 'beta', 'gamma']:
         try:
             if consumers[cluster]:
@@ -400,6 +384,37 @@ def consumer_task():
                 consumer_clients[cluster] = None
         except Exception as e:
             log_message("CONSUMER", f"Error during cleanup of {cluster}: {str(e)}", "red")
+
+def consumer_task():
+    """Main consumer task that receives messages from all clusters"""
+    global alpha_failed, beta_failed, gamma_failed
+
+    # Connect to all clusters initially
+    clusters = ['alpha', 'beta', 'gamma']
+    connected_clusters = [connect_consumer(cluster) for cluster in clusters]
+
+    # If we couldn't connect to any cluster, exit
+    if not any(connected_clusters):
+        log_message("CONSUMER", "Failed to connect to any cluster, exiting", "red")
+        return
+
+    log_message("CONSUMER", "Connected to clusters with shared subscription", "green")
+
+    while running:
+        try:
+            # Try to receive messages from each cluster
+            for cluster in clusters:
+                try_receive_message(cluster)
+
+            # Try to reconnect to failed clusters
+            try_reconnect_failed_clusters()
+
+        except Exception as e:
+            log_message("CONSUMER", f"Error: {str(e)}", "red")
+            time.sleep(1)
+
+    # Clean up all consumers and clients
+    cleanup_consumers()
 
     log_message("CONSUMER", "Consumer task completed", "green")
     log_message("SUMMARY", f"Received {len(received_messages)} unique messages", "yellow")

@@ -13,7 +13,7 @@ fi
 # Check if virtual environment exists
 if [ ! -d "pulsar_venv" ]; then
     echo "Creating Python virtual environment..."
-    python3 -m venv pulsar_venv
+    python3.9 -m venv pulsar_venv
     echo "Installing Python dependencies in virtual environment..."
     source pulsar_venv/bin/activate
     pip install -r requirements.txt
@@ -35,7 +35,7 @@ export USE_EXTERNAL_CHAOS=true
 
 # Run the Python demo
 echo "Starting Pulsar demo application with external chaos..."
-python3 pulsar_demo.py
+python3.9 pulsar_demo.py
 
 # When the demo exits, kill the chaos script
 echo "Demo application closed. Stopping chaos script..."

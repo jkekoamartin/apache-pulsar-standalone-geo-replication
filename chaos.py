@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.9
 import subprocess
 import time
 import random
@@ -93,22 +93,22 @@ def main():
     log_message("Starting chaos testing script")
     log_message(f"Interval: {args.min_interval}-{args.max_interval}s, Downtime: {args.min_downtime}-{args.max_downtime}s")
     log_message(f"Failure probability: {args.failure_probability}")
-    
+
     # Make sure all clusters are running at the start
     ensure_all_clusters_running()
-    
+
     clusters = ["alpha", "beta", "gamma"]
-    
+
     while running:
         # Wait for a random time between min_interval and max_interval seconds
         sleep_time = random.randint(args.min_interval, args.max_interval)
         log_message(f"Waiting {sleep_time} seconds before next chaos event")
         time.sleep(sleep_time)
-        
+
         if random.random() < args.failure_probability:
             # Choose a random cluster to fail
             target_cluster = random.choice(clusters)
-            
+
             # Check if the cluster is running
             if check_cluster_status(target_cluster):
                 # Stop the cluster
@@ -117,7 +117,7 @@ def main():
                     downtime = random.randint(args.min_downtime, args.max_downtime)
                     log_message(f"Keeping {target_cluster} down for {downtime} seconds")
                     time.sleep(downtime)
-                    
+
                     # Start the cluster again
                     start_cluster(target_cluster)
             else:

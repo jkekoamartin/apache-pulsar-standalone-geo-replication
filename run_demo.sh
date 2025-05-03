@@ -13,7 +13,7 @@ fi
 # Check if virtual environment exists
 if [ ! -d "pulsar_venv" ]; then
     echo "Creating Python virtual environment..."
-    python3 -m venv pulsar_venv
+    python3.9 -m venv pulsar_venv
     echo "Installing Python dependencies in virtual environment..."
     source pulsar_venv/bin/activate
     pip install -r requirements.txt
@@ -24,7 +24,7 @@ fi
 
 # Run the Python demo
 echo "Starting Pulsar demo application..."
-python3 pulsar_demo.py
+python3.9 pulsar_demo.py
 
 # Note: The script will end when the Python application is closed
 echo "Demo application closed."
